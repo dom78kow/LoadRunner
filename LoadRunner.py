@@ -3,7 +3,6 @@ import sys
 import os
 
 pygame.init()
-
 os.environ['SDL_VIDEO_CENTERED'] = '1'
 
 # --- Directories ---
@@ -17,7 +16,7 @@ SOUNDS_DIR = "sounds"
 tile_size = 40
 clock = pygame.time.Clock()
 player_speed = 3
-hud_height = tile_size * 2  # miejsce na HUD
+hud_height = tile_size * 2
 
 # Temporary window for convert_alpha()
 pygame.display.set_mode((1, 1))
@@ -33,7 +32,8 @@ textures = {
     "0": load_texture(os.path.join(ICONS_DIR, "floor.png"), (tile_size, tile_size)),
     "1": load_texture(os.path.join(ICONS_DIR, "wall.png"), (tile_size, tile_size)),
     "D": load_texture(os.path.join(ICONS_DIR, "door.png"), (tile_size, tile_size)),
-    "L": load_texture(os.path.join(ICONS_DIR, "ladder1.png"), (tile_size, tile_size)),
+    "L": load_texture(os.path.join(ICONS_DIR, "ladder.png"), (tile_size, tile_size)),
+    "K": load_texture(os.path.join(ICONS_DIR, "key.png"), (tile_size, tile_size)),
 }
 
 # --- Player animations ---
@@ -79,18 +79,43 @@ player_anim_speed = 150
 # --- HUD variables ---
 player_lives = 3
 player_keys = 0
-heart_img = load_texture(os.path.join(ICONS_DIR, "heart.png"), (tile_size, tile_size))
+max_lives = 3
+max_keys = 3
+
+hud_icon_size = 24  # rozmiar ikon w HUD
+
+# Ładowanie ikon HUD w zmniejszonym rozmiarze
+heart_img = load_texture(os.path.join(ICONS_DIR, "heart.png"), (hud_icon_size, hud_icon_size))
+heart_ghost = load_texture(os.path.join(ICONS_DIR, "heart_ghost.png"), (hud_icon_size, hud_icon_size))
+key_img = load_texture(os.path.join(ICONS_DIR, "key.png"), (hud_icon_size, hud_icon_size))
+key_ghost = load_texture(os.path.join(ICONS_DIR, "key_ghost.png"), (hud_icon_size, hud_icon_size))
+
+door_ghost = load_texture(os.path.join(ICONS_DIR, "door_ghost.png"), (tile_size, tile_size))
+
+hud_icon_size = 24
+hud_height = hud_icon_size + 10  # belka HUD = ikony + margines
 
 def draw_hud():
-    # Szare tło pod HUD
-    pygame.draw.rect(screen, (50, 50, 50), (0, 0, map_width, hud_height))
-    # Draw lives
-    for i in range(player_lives):
-        screen.blit(heart_img, (10 + i * (tile_size + 5), 10))
-    # Draw keys
-    font = pygame.font.Font(None, 32)
-    text = font.render(f"Keys: {player_keys}", True, (255, 255, 255))
-    screen.blit(text, (10, 10 + tile_size + 5))
+    spacing = 5
+    pygame.draw.rect(screen, (50, 50, 50), (0, 0, map_width, hud_height))  # HUD w szarym
+
+    # Hearts (po lewej)
+    for i in range(max_lives):
+        x = 10 + i * (hud_icon_size + spacing)
+        y = (hud_height - hud_icon_size) // 2
+        if i < player_lives:
+            screen.blit(heart_img, (x, y))
+        else:
+            screen.blit(heart_ghost, (x, y))
+
+    # Keys (po prawej)
+    for i in range(max_keys):
+        x = map_width - (i + 1) * (hud_icon_size + spacing) - 10 + spacing
+        y = (hud_height - hud_icon_size) // 2
+        if i < player_keys:
+            screen.blit(key_img, (x, y))
+        else:
+            screen.blit(key_ghost, (x, y))
 
 # --- Sounds ---
 pygame.mixer.init()
@@ -108,7 +133,7 @@ def load_map(filename):
     return [list(line) for line in lines]
 
 def start_level(level_index):
-    global level_map, screen, player, map_width, map_height, doors
+    global level_map, screen, player, map_width, map_height, doors, map_keys
 
     filename = os.path.join(MAPS_DIR, f"map{level_index}.txt")
     if not os.path.exists(filename):
@@ -118,6 +143,7 @@ def start_level(level_index):
 
     level_map = load_map(filename)
     doors = []
+    map_keys = []
 
     start_x, start_y = None, None
     for row in range(len(level_map)):
@@ -127,6 +153,9 @@ def start_level(level_index):
                 level_map[row][col] = "0"
             elif level_map[row][col] == "D":
                 doors.append(pygame.Rect(col*tile_size, row*tile_size + hud_height, tile_size, tile_size))
+            elif level_map[row][col] == "K":
+                map_keys.append(pygame.Rect(col*tile_size, row*tile_size + hud_height, tile_size, tile_size))
+                level_map[row][col] = "0"
 
     if start_x is None or start_y is None:
         print(f"Error: no start point (S) in {filename}")
@@ -160,6 +189,10 @@ def check_collision(rect):
 current_level = 1
 start_level(current_level)
 
+door_opening = False
+door_timer = 0
+door_target = None
+
 # --- Game loop ---
 while True:
     for event in pygame.event.get():
@@ -191,13 +224,33 @@ while True:
     if not check_collision(new_rect):
         player.y = new_rect.y
 
-    # Doors
-    for door in doors:
-        if player.colliderect(door):
-            door_sound.play()
+    # Doors - open only if player has a key
+    if not door_opening:
+        for door in doors:
+            if player.colliderect(door) and player_keys > 0:
+                door_sound.play()
+                player_keys -= 1
+                door_opening = True
+                door_timer = pygame.time.get_ticks()
+                door_target = door
+                break
+
+    # Door opening animation
+    door_mirror = False
+    if door_opening:
+        now = pygame.time.get_ticks()
+        if now - door_timer > 1200:
+            door_opening = False
             current_level += 1
             start_level(current_level)
-            break
+        else:
+            door_mirror = ((now - door_timer) // 150) % 2 == 0
+
+    # Keys collection
+    for key_rect in map_keys[:]:
+        if player.colliderect(key_rect):
+            player_keys += 1
+            map_keys.remove(key_rect)
 
     # --- Animation ---
     moving = (move_x != 0 or move_y != 0)
@@ -213,16 +266,23 @@ while True:
     # --- Drawing ---
     screen.fill((0, 0, 0))
 
-    # Draw map
+    # Draw map (without doors and keys)
     for row in range(len(level_map)):
         for col in range(len(level_map[row])):
             tile = level_map[row][col]
-            if tile in textures and tile != "D":
+            if tile in textures and tile not in ("D", "K"):
                 screen.blit(textures[tile], (col * tile_size, row * tile_size + hud_height))
 
-    # Draw doors
+    # Draw doors (with ghost animation)
     for door in doors:
-        screen.blit(textures["D"], door)
+        if door_opening and door is door_target and door_mirror:
+            screen.blit(door_ghost, door)
+        else:
+            screen.blit(textures["D"], door)
+
+    # Draw keys on map
+    for key_rect in map_keys:
+        screen.blit(textures["K"], key_rect)
 
     # Draw player
     screen.blit(player_img, player)
